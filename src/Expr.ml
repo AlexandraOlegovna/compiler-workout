@@ -35,13 +35,14 @@ let update x v s = fun y -> if x = y then v else s y
 (* An example of a non-trivial state: *)                                                   
 let s = update "x" 1 @@ update "y" 2 @@ update "z" 3 @@ update "t" 4 empty
 
-(* Some testing; comment this definition out when submitting the solution. *)
+(* Some testing; comment this definition out when submitting the solution.
 let _ =
   List.iter
     (fun x ->
        try  Printf.printf "%s=%d\n" x @@ s x
        with Failure s -> Printf.printf "%s\n" s
     ) ["x"; "a"; "y"; "z"; "t"; "b"]
+*)
 
 (* Expression evaluator
 
@@ -50,5 +51,23 @@ let _ =
    Takes a state and an expression, and returns the value of the expression in 
    the given state.
 *)
-let eval = failwith "Not implemented yet"
-                    
+
+let b2i b = if b then 1 else 0
+let i2b i = if (i == 0) then false else true
+
+let rec eval state expr = match expr with
+  | Const x -> x
+  | Var x -> state x
+  | Binop ("+", x, y) -> eval state x + eval state y
+  | Binop ("-", x, y) -> eval state x - eval state y
+  | Binop ("*", x, y) -> eval state x * eval state y
+  | Binop ("/", x, y) -> eval state x / eval state y
+  | Binop ("%", x, y) -> eval state x mod eval state y
+  | Binop ("<", x, y) -> b2i(eval state x < eval state y)
+  | Binop ("<=", x, y) -> b2i(eval state x <= eval state y)
+  | Binop (">", x, y) -> b2i(eval state x > eval state y)
+  | Binop (">=", x, y) -> b2i(eval state x >= eval state y)
+  | Binop ("==", x, y) -> b2i(eval state x == eval state y)
+  | Binop ("!=", x, y) -> b2i(eval state x <> eval state y)
+  | Binop ("&&", x, y) -> b2i(i2b(eval state x) && i2b(eval state y))
+  | Binop ("!!", x, y) -> b2i(i2b(eval state x) || i2b(eval state y))
