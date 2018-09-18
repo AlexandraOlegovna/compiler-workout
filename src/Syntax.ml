@@ -2,13 +2,13 @@
    The library provides "@type ..." syntax extension and plugins like show, etc.
 *)
 open GT 
-    
+
 (* Simple expressions: syntax and semantics *)
 module Expr =
   struct
-    
-    (* The type for expressions. Note, in regular OCaml there is no "@type..." 
-       notation, it came from GT. 
+
+    (* The type for expressions. Note, in regular OCaml there is no "@type..."
+       notation, it came from GT.
     *)
     @type t =
     (* integer constant *) | Const of int
@@ -22,14 +22,14 @@ module Expr =
         +, -                 --- addition, subtraction
         *, /, %              --- multiplication, division, reminder
     *)
-                                                            
+
     (* State: a partial map from variables to integer values. *)
-    type state = string -> int 
+    type state = string -> int
 
     (* Empty state: maps every variable into nothing. *)
     let empty = fun x -> failwith (Printf.sprintf "Undefined variable %s" x)
 
-    (* Update: non-destructively "modifies" the state s by binding the variable x 
+    (* Update: non-destructively "modifies" the state s by binding the variable x
       to value v and returns the new state.
     *)
     let update x v s = fun y -> if x = y then v else s y
@@ -37,14 +37,35 @@ module Expr =
     (* Expression evaluator
 
           val eval : state -> t -> int
- 
-       Takes a state and an expression, and returns the value of the expression in 
+
+       Takes a state and an expression, and returns the value of the expression in
        the given state.
     *)
-    let eval _ = failwith "Not implemented yet"
+    let b2i b = if b then 1 else 0
+    let i2b i = if (i == 0) then false else true
+
+    let rec evalB op x y = match op with
+        | "+" -> x + y
+        | "-" -> x - y
+        | "*" -> x * y
+        | "/" -> x / y
+        | "%" -> x mod y
+        | "<" -> b2i(x < y)
+        | "<=" -> b2i(x <= y)
+        | ">" -> b2i(x > y)
+        | ">=" -> b2i(x >= y)
+        | "==" -> b2i(x == y)
+        | "!=" -> b2i(x <> y)
+        | "&&" -> b2i(i2b x && i2b y)
+        | "!!" -> b2i(i2b x || i2b y)
+
+    let rec eval state expr = match expr with
+        | Const x -> x
+        | Var x -> state x
+        | Binop (op, x, y) -> evalB op (eval state x) (eval state y)
 
   end
-                    
+
 (* Simple statements: syntax and sematics *)
 module Stmt =
   struct
@@ -57,7 +78,7 @@ module Stmt =
     (* composition                      *) | Seq    of t * t with show
 
     (* The type of configuration: a state, an input stream, an output stream *)
-    type config = Expr.state * int list * int list 
+    type config = Expr.state * int list * int list
 
     (* Statement evaluator
 
@@ -65,7 +86,12 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let eval _ = failwith "Not implemented yet"
+    let rec eval ((state, input, output) as config) stm = match stm with
+        | Seq (x, y) -> eval (eval config x) y
+        | Assign (x, e) -> ((Expr.update x (Expr.eval state e) state), input, output)
+        | Read x -> (match input with
+                    | y :: ys -> ((Expr.update x y state), ys, output))
+        | Write e -> (state, input, (Expr.eval state e) :: output)
                                                          
   end
 
