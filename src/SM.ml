@@ -23,8 +23,16 @@ type config = int list * Stmt.config
      val eval : config -> prg -> config
 
    Takes a configuration and a program, and returns a configuration as a result
- *)                         
-let eval _ = failwith "Not yet implemented"
+ *)
+let eval config instructions =
+    let evalHelper conf instr = match conf, instr with
+        | (stack, conf), (CONST c) -> (c :: stack, conf)
+        | (x :: xs, (state, input, output)), (WRITE) -> (xs, (state, input, output @ [x]))
+        | (stack, (state, (x :: input), output)), (READ) -> (x :: stack, (state, input, output))
+        | (stack, ((state, _, _) as conf)), (LD x) -> ((state x) :: stack, conf)
+        | ((x :: xs), (state, input, output)), (ST y) -> (xs, (Expr.update y x state, input, output))
+        | (x :: y :: zs, conf), (BINOP op) -> ((Expr.evalB op y x) :: zs, conf)
+    in List.fold_left evalHelper config instructions
 
 (* Top-level evaluation
 
@@ -41,4 +49,14 @@ let run p i = let (_, (_, _, o)) = eval ([], (Language.Expr.empty, i, [])) p in 
    Takes a program in the source language and returns an equivalent program for the
    stack machine
  *)
-let compile _ = failwith "Not yet implemented"
+
+let rec compile stmt =
+    let rec compileHelper expr = match expr with
+        | Expr.Const x -> [CONST x]
+        | Expr.Var x -> [LD x]
+        | Expr.Binop (op, x, y) -> compileHelper x @ compileHelper y @ [BINOP op]
+    in match stmt with
+        | Stmt.Seq (x, y) -> compile x @ compile y
+        | Stmt.Assign (x, e) -> compileHelper e @ [ST x]
+        | Stmt.Read x -> [READ; ST x]
+        | Stmt.Write e -> compileHelper e @ [WRITE]
