@@ -80,7 +80,96 @@ open SM
    Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
    of x86 instructions
 *)
-let compile _ _ = failwith "Not yet implemented"
+
+let isRegister a = match a with
+ | R _ -> true
+ | _ -> false
+
+
+let toOperation x = match x with
+| "<"  -> "l"
+| ">"  -> "g"
+| "<=" -> "le"
+| ">=" -> "ge"
+| "==" -> "e"
+| "!=" -> "ne"
+
+
+let rec compile env = function
+| [] -> env, []
+| instr :: prog ->
+  let env, prog' =
+    match instr with
+    | CONST n ->
+        let v, env' = env#allocate in env', [Mov (L n, v)]
+    | WRITE ->
+        let v, env' = env#pop in
+        env', [ Push v;
+                Call "Lwrite";
+                Pop eax]
+    | READ ->
+        let v, env' = env#allocate in
+        env', [ Call "Lread";
+                Mov (eax, v)]
+    | ST a ->
+        let v, env' = (env#global a)#pop in
+        let c = M (env#loc a) in
+            if (isRegister(v) or isRegister(c))
+                then env', [  Mov (v, c)]
+                else env', [  Mov (v, eax);
+                              Mov (eax, c)]
+    | LD a ->
+        let v, env' = (env#global a)#allocate in
+        let c = M (env#loc a) in
+            if (isRegister(v) or isRegister(c))
+                then env', [  Mov (c, v)]
+                else env', [  Mov (c, eax);
+                              Mov (eax, v)]
+    | BINOP op ->
+        let b, a, env = env#pop2 in
+        let _, env = env#allocate in
+        match op with
+        | "/"             -> env,
+                            [   Mov (a, eax);
+                                Cltd;
+                                IDiv b;
+                                Mov (eax, a)]
+        | "%"             -> env,
+                            [   Mov (a, eax);
+                                Cltd;
+                                IDiv b;
+                                Mov (edx, a)]
+        | "+" | "-" | "*" -> env,
+                            [   Mov (a, eax);
+                                Binop (op, b, eax);
+                                Mov (eax, a)]
+        | "!!" ->            env,
+                            [   Mov (a, eax);
+                                Binop ("^", edx, edx);
+                                Binop (op, b, eax);
+                                Mov (L 0, edx);
+                                Set ("ne", "%dl");
+                                Mov (edx, a)
+                              ]
+        | "&&" ->            env,
+                            [   Mov (L 0, eax);
+                                Mov (L 0, edx);
+                                Binop ("cmp", eax, a);
+                                Set ("ne", "%al");
+                                Binop ("cmp", edx, b);
+                                Set ("ne", "%dl");
+                                Binop (op, eax, edx);
+                                Mov (edx, a) ]
+        | "<" | ">" | "<=" | ">=" | "==" | "!=" ->
+                            let op' = toOperation(op) in
+                            env,
+                            [   Mov (a, eax);
+                                Binop ("cmp", b, eax);
+                                Mov (L 0, edx);
+                                Set (op', "%dl");
+                                Mov (edx, a)]
+    in let env, prog'' = compile env prog in env, prog' @ prog''
+
 
 (* A set of strings *)           
 module S = Set.Make (String)

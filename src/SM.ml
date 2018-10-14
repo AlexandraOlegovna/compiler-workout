@@ -23,8 +23,41 @@ type config = int list * Stmt.config
      val eval : config -> prg -> config
 
    Takes a configuration and a program, and returns a configuration as a result
-*)                         
-let rec eval conf prog = failwith "Not yet implemented"
+ *)
+ let evalComm (stack, (olds, inp, out)) comm = match comm with
+        | CONST x  -> (x :: stack, (olds, inp, out))
+        | BINOP op -> begin match stack with
+                        | x1 :: x2 :: stack' ->
+                            let res = Language.Expr.eval
+                                    Language.Expr.empty
+                                        (Language.Expr.Binop op
+                                            (Language.Expr.Const x2)
+                                            (Language.Expr.Const x1)
+                                        ) in
+                                (res :: stack', (olds, inp, out))
+                        | _                 -> failwith "Too few values at stack, can't eval BINOP"
+                      end
+
+        | READ     -> begin match inp with
+                        | x :: inp' -> (x :: stack, (olds, inp', out))
+                        | []          -> failwith "Too few values to READ"
+                      end
+
+        | WRITE    -> begin match stack with
+                        | x :: stack' -> (stack', (olds, inp, out @ [x]))
+                        | []           -> failwith "Too few values at stack, can't WRITE"
+                      end
+
+        | LD v   -> (olds v :: stack, (olds, inp, out))
+        | ST v   -> begin match stack with
+                        | x :: stack' -> (stack', (Language.Expr.update v x olds, inp, out))
+                        | []           -> failwith "Too few values at stack"
+                      end
+
+
+let rec eval conf pr = match pr with
+        | head :: pr' -> eval (evalComm conf head) pr'
+        | []                 -> conf
 
 (* Top-level evaluation
 
