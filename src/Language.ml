@@ -38,13 +38,34 @@ module Expr =
     let update x v s = fun y -> if x = y then v else s y
 
     (* Expression evaluator
-
           val eval : state -> t -> int
  
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
-    *)                                                       
-    let eval st expr = failwith "Not yet implemented"
+    *)
+
+    let b2i b = if b then 1 else 0
+    let i2b i = if (i == 0) then false else true
+
+    let rec evalB op x y = match op with
+        | "+" -> x + y
+        | "-" -> x - y
+        | "*" -> x * y
+        | "/" -> x / y
+        | "%" -> x mod y
+        | "<" -> b2i(x < y)
+        | "<=" -> b2i(x <= y)
+        | ">" -> b2i(x > y)
+        | ">=" -> b2i(x >= y)
+        | "==" -> b2i(x == y)
+        | "!=" -> b2i(x <> y)
+        | "&&" -> b2i(i2b x && i2b y)
+        | "!!" -> b2i(i2b x || i2b y)
+
+    let rec eval state expr = match expr with
+        | Const x -> x
+        | Var x -> state x
+        | Binop (op, x, y) -> evalB op (eval state x) (eval state y)
 
     (* Expression parser. You can use the following terminals:
 
@@ -52,8 +73,35 @@ module Expr =
          DECIMAL --- a decimal constant [0-9]+ as a string
                                                                                                                   
     *)
-    ostap (                                      
-      parse: empty {failwith "Not yet implemented"}
+    (* https://github.com/dboulytchev/ostap/blob/master/sample/Sample.ml#L188 *)
+    ostap (
+        expr:
+            !(Ostap.Util.expr
+                (fun x -> x)
+                [|
+                    `Lefta , [
+                            ostap ("!!"), (fun x y -> Binop ("!!", x, y))];
+                    `Lefta , [
+                            ostap ("&&"), (fun x y -> Binop ("&&", x, y))];
+                    `Nona , [
+                            ostap ("=="), (fun x y -> Binop ("==", x, y));
+                            ostap ("!="), (fun x y -> Binop ("!=", x, y));
+                            ostap (">="), (fun x y -> Binop (">=", x, y));
+                            ostap ("<="), (fun x y -> Binop ("<=", x, y));
+                            ostap (">"), (fun x y -> Binop (">", x, y));
+                            ostap ("<"), (fun x y -> Binop ("<", x, y))];
+                    `Lefta , [
+                            ostap ("-"), (fun x y -> Binop ("-", x, y));
+                            ostap ("+"), (fun x y -> Binop ("+", x, y))];
+                    `Lefta , [
+                            ostap ("*"), (fun x y -> Binop ("*", x, y));
+                            ostap ("%"), (fun x y -> Binop ("%", x, y));
+                            ostap ("/"), (fun x y -> Binop ("/", x, y))];
+                |]
+                parse
+                );
+
+        parse: x:IDENT {Var x} | x:DECIMAL {Const x} |  -"(" expr -")"
     )
     
   end
@@ -71,7 +119,7 @@ module Stmt =
     (* empty statement                  *) | Skip
     (* conditional                      *) | If     of Expr.t * t * t
     (* loop with a pre-condition        *) | While  of Expr.t * t
-    (* loop with a post-condition       *) (* add yourself *)  with show
+    (* loop with a post-condition       *) | Repeat of t * Expr.t  with show
                                                                     
     (* The type of configuration: a state, an input stream, an output stream *)
     type config = Expr.state * int list * int list 
@@ -82,11 +130,68 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let rec eval conf stmt = failwith "Not yet implemented"
-                               
+
+    let rec eval ((state, input, output) as config) stm = match stm with
+        | Seq (x, y) -> eval (eval config x) y
+        | Assign (x, e) -> ((Expr.update x (Expr.eval state e) state), input, output)
+        | Read x -> (match input with
+                    | y :: ys -> ((Expr.update x y state), ys, output))
+        | Write e -> (state, input, output @ [Expr.eval state e])
+        | Skip -> config
+        | If (condition, thenBranch, elseBranch) -> (
+            match (Expr.i2b(Expr.eval state condition)) with
+            | true -> eval config thenBranch
+            | false -> eval config elseBranch)
+        | While (condition, body) -> (
+            match (Expr.i2b (Expr.eval state condition)) with
+            | true -> eval (eval config body) (While (condition, body))
+            | false -> config)
+        | Repeat (body, condition) ->
+            let (newState, _, _) as newConfig = eval config body in eval newConfig (
+            match (Expr.i2b (Expr.eval newState condition)) with
+                | true -> Skip
+                | false -> Repeat (body, condition)
+          )
+
+
     (* Statement parser *)
+    (* https://github.com/dboulytchev/ostap/blob/master/sample/Sample.ml#L244 *)
     ostap (
-      parse: empty {failwith "Not yet implemented"}
+
+      elif_stmt:
+            condition:!(Expr.expr) "then" thenBranch:parse "elif" elifBranch:elif_stmt
+                {If (condition, thenBranch, elifBranch)}
+            | condition:!(Expr.expr) "then" thenBranch:parse "else" elseBranch:parse
+                 {If (condition, thenBranch, elseBranch)}
+            | condition:!(Expr.expr) "then" thenBranch:parse
+                {If (condition, thenBranch, Skip)};
+
+      simple_stmt:
+              x:IDENT ":=" e:!(Expr.expr)                       {Assign(x, e)}
+              | "read" "(" x:IDENT ")"                           {Read(x)}
+              | "write" "(" e:!(Expr.expr) ")"                   {Write(e)}
+              | "skip"                                           {Skip}
+              | "if" condition:!(Expr.expr) "then" thenBranch:parse "elif" elifBranch:elif_stmt "fi"
+                    {If (condition, thenBranch, elifBranch)}
+              | "if" condition:!(Expr.expr) "then" thenBranch:parse "else" elseBranch:parse "fi"
+                    {If (condition, thenBranch, elseBranch)}
+              | "if" condition:!(Expr.expr) "then" thenBranch:parse "fi"
+                    {If (condition, thenBranch, Skip)}
+              | "while" condition:!(Expr.expr)
+                "do" body:parse
+                "od"
+                {While (condition, body)}
+              | "repeat" body:parse
+                "until" condition:!(Expr.expr)
+                {Repeat (body, condition)}
+              | "for" init:simple_stmt
+                "," condition:!(Expr.expr)
+                "," inc:simple_stmt
+                "do" body:parse
+                "od"
+                {Seq(init, While(condition, Seq(body, inc)))};
+
+      parse: <s::ss> : !(Ostap.Util.listBy)[ostap (";")][simple_stmt] {List.fold_left (fun s ss -> Seq (s, ss)) s ss}
     )
       
   end

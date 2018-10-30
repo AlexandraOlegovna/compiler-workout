@@ -22,13 +22,52 @@ type prg = insn list
 type config = int list * Stmt.config
 
 (* Stack machine interpreter
+     val eval : config -> prg -> config
+   Takes a configuration and a program, and returns a configuration as a result
+ *)
+ let evalComm (stack, (olds, inp, out)) comm = match comm with
+        | LABEL _ -> (stack, (olds, inp, out))
+        | CONST x  -> (x :: stack, (olds, inp, out))
+        | BINOP op -> begin match stack with
+                        | x1 :: x2 :: stack' ->
+                            let res = Language.Expr.eval
+                                    Language.Expr.empty
+                                        (Language.Expr.Binop op
+                                            (Language.Expr.Const x2)
+                                            (Language.Expr.Const x1)
+                                        ) in
+                                (res :: stack', (olds, inp, out))
+                        | _                 -> failwith "Too few values at stack, can't eval BINOP"
+                      end
 
-     val eval : env -> config -> prg -> config
+        | READ     -> begin match inp with
+                        | x :: inp' -> (x :: stack, (olds, inp', out))
+                        | []          -> failwith "Too few values to READ"
+                      end
 
-   Takes an environment, a configuration and a program, and returns a configuration as a result. The
-   environment is used to locate a label to jump to (via method env#labeled <label_name>)
-*)                         
-let rec eval env conf prog = failwith "Not yet implemented"
+        | WRITE    -> begin match stack with
+                        | x :: stack' -> (stack', (olds, inp, out @ [x]))
+                        | []           -> failwith "Too few values at stack, can't WRITE"
+                      end
+
+        | LD v   -> (olds v :: stack, (olds, inp, out))
+        | ST v   -> begin match stack with
+                        | x :: stack' -> (stack', (Language.Expr.update v x olds, inp, out))
+                        | []           -> failwith "Too few values at stack"
+                      end
+
+
+let rec eval env ((stack, (_, _, _)) as config) pr = match pr with
+        | []          -> config
+        | head :: pr' -> match head with
+            | JMP label    -> eval env config (env#labeled label)
+            | CJMP(s, label) ->
+                            (match stack with
+                              | [] -> config
+                              | l :: _ -> if ((s = "z") = (l = 0))
+                                           then eval env config (env#labeled label)
+                                           else eval env config pr')
+        | _ -> eval env (evalComm config head) pr'
 
 (* Top-level evaluation
 
@@ -46,6 +85,13 @@ let run p i =
   let m = make_map M.empty p in
   let (_, (_, _, o)) = eval (object method labeled l = M.find l m end) ([], (Expr.empty, i, [])) p in o
 
+let nameGenerator = object
+    val mutable i = 0
+    method name =
+        i <- (i + 1);
+        (Printf.sprintf "label%d" i)
+end
+
 (* Stack machine compiler
 
      val compile : Language.Stmt.t -> prg
@@ -53,4 +99,26 @@ let run p i =
    Takes a program in the source language and returns an equivalent program for the
    stack machine
 *)
-let compile p = failwith "Not yet implemented"
+let rec compile =
+  let rec expr = function
+  | Expr.Var   x          -> [LD x]
+  | Expr.Const n          -> [CONST n]
+  | Expr.Binop (op, x, y) -> expr x @ expr y @ [BINOP op]
+  in
+  function
+  | Stmt.Seq (s1, s2)  -> compile s1 @ compile s2
+  | Stmt.Read x        -> [READ; ST x]
+  | Stmt.Write e       -> expr e @ [WRITE]
+  | Stmt.Assign (x, e) -> expr e @ [ST x]
+  | Stmt.Skip -> []
+  | Stmt.If (condition, thenBranch, elseBranch) ->
+              let elseLabel = nameGenerator#name in
+              let endLabel = nameGenerator#name in
+              expr condition @ [CJMP ("z", elseLabel)] @ (compile thenBranch) @ [JMP endLabel] @ [LABEL elseLabel] @ (compile elseBranch) @ [LABEL endLabel]
+ | Stmt.While (condition, body) ->
+         let beginLabel = nameGenerator#name in
+         let endLabel = nameGenerator#name in
+         [LABEL beginLabel] @ (expr condition) @ [CJMP ("z", endLabel)] @ (compile body) @ [JMP beginLabel] @ [LABEL endLabel]
+ | Stmt.Repeat (body, condition) ->
+         let beginLabel = nameGenerator#name in
+         [LABEL beginLabel] @ compile body @ expr condition @ [CJMP ("z", beginLabel)]
