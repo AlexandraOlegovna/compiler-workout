@@ -62,7 +62,11 @@ module Expr =
  
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
-    *)                                                       
+    *)
+
+    let b2i b = if b then 1 else 0
+    let i2b i = if (i == 0) then false else true
+
     let to_func op =
       let bti   = function true -> 1 | _ -> 0 in
       let itb b = b <> 0 in
@@ -150,13 +154,75 @@ module Stmt =
 
        which returns a list of formal parameters and a body for given definition
     *)
-    let rec eval _ = failwith "Not Implemented Yet"
-                                
-    (* Statement parser *)
-    ostap (                                      
-      parse: empty {failwith "Not yet implemented"}
-    )
-      
+    let rec eval env ((state, input, output) as config) stm = match stm with
+            | Seq (x, y) -> eval env (eval env config x) y
+            | Assign (x, e) -> ((State.update x (Expr.eval state e) state), input, output)
+            | Read x -> (match input with
+                        | y :: ys -> ((State.update x y state), ys, output))
+            | Write e -> (state, input, output @ [Expr.eval state e])
+            | Skip -> config
+            | If (condition, thenBranch, elseBranch) -> (
+                match (Expr.i2b(Expr.eval state condition)) with
+                | true -> eval env config thenBranch
+                | false -> eval env config elseBranch)
+            | While (condition, body) -> (
+                match (Expr.i2b(Expr.eval state condition)) with
+                | true -> eval env (eval env config body) (While (condition, body))
+                | false -> config)
+            | Repeat (body, condition) ->
+                let (newState, _, _) as newConfig = eval env config body in eval env newConfig (
+                match (Expr.i2b (Expr.eval newState condition)) with
+                    | true -> Skip
+                    | false -> Repeat (body, condition)
+              )
+            | Call (f, arg) ->
+                let args, local, body = env#definition f in
+                let start = List.fold_left2 (fun s n v -> State.update n (Expr.eval state v) s) (State.push_scope state (args @ local)) args arg in
+                let final, input', output' = eval env (start, input, output) body
+                in (State.drop_scope final state, input', output')
+
+
+        (* Statement parser *)
+        (* https://github.com/dboulytchev/ostap/blob/master/sample/Sample.ml#L244 *)
+        ostap (
+
+          elif_stmt:
+                condition:!(Expr.parse) "then" thenBranch:parse "elif" elifBranch:elif_stmt
+                    {If (condition, thenBranch, elifBranch)}
+                | condition:!(Expr.parse) "then" thenBranch:parse "else" elseBranch:parse
+                     {If (condition, thenBranch, elseBranch)}
+                | condition:!(Expr.parse) "then" thenBranch:parse
+                    {If (condition, thenBranch, Skip)};
+
+          simple_stmt:
+                  x:IDENT ":=" e:!(Expr.parse)                       {Assign(x, e)}
+                  | "read" "(" x:IDENT ")"                           {Read(x)}
+                  | "write" "(" e:!(Expr.parse) ")"                   {Write(e)}
+                  | "skip"                                           {Skip}
+                  | "if" condition:!(Expr.parse) "then" thenBranch:parse "elif" elifBranch:elif_stmt "fi"
+                        {If (condition, thenBranch, elifBranch)}
+                  | "if" condition:!(Expr.parse) "then" thenBranch:parse "else" elseBranch:parse "fi"
+                        {If (condition, thenBranch, elseBranch)}
+                  | "if" condition:!(Expr.parse) "then" thenBranch:parse "fi"
+                        {If (condition, thenBranch, Skip)}
+                  | "while" condition:!(Expr.parse)
+                    "do" body:parse
+                    "od"
+                    {While (condition, body)}
+                  | "repeat" body:parse
+                    "until" condition:!(Expr.parse)
+                    {Repeat (body, condition)}
+                  | "for" init:simple_stmt
+                    "," condition:!(Expr.parse)
+                    "," inc:simple_stmt
+                    "do" body:parse
+                    "od"
+                    {Seq(init, While(condition, Seq(body, inc)))}
+                  | name:IDENT "(" args:!(Ostap.Util.list0)[Expr.parse] ")" { Call (name, args) };
+
+          parse: <s::ss> : !(Ostap.Util.listBy)[ostap (";")][simple_stmt] {List.fold_left (fun s ss -> Seq (s, ss)) s ss}
+        )
+
   end
 
 (* Function and procedure definitions *)
@@ -166,9 +232,10 @@ module Definition =
     (* The type for a definition: name, argument list, local variables, body *)
     type t = string * (string list * string list * Stmt.t)
 
-    ostap (                                      
-      parse: empty {failwith "Not yet implemented"}
-    )
+    ostap (
+          loc: l:!(ostap("local" names:(!(Ostap.Util.listBy) [ostap (",")] [ostap(IDENT)]) { names }))? { match l with | Some x -> x | None -> []};
+          parse: "fun" name:IDENT "(" args:(!(Ostap.Util.list0By) [ostap (",")] [ostap(IDENT)]) ")" loc:loc "{" body:!(Stmt.parse) "}" { (name, (args, loc, body)) }
+             )
 
   end
     
